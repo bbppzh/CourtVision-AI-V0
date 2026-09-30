@@ -1,4 +1,5 @@
 ultralytics>=8.4.0,<9
+lap>=0.5.12,<1
 opencv-python>=4.8,<6
 numpy>=1.26,<3
 pytest>=8,<10
