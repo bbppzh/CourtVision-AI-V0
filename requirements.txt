@@ -1,0 +1,4 @@
+ultralytics>=8.4.0,<9
+opencv-python>=4.8,<6
+numpy>=1.26,<3
+pytest>=8,<10

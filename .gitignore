@@ -1,0 +1,20 @@
+# Python environments and generated files
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local videos, model weights, and Ultralytics output
+data/input/*
+data/output/*
+!data/input/.gitkeep
+!data/output/.gitkeep
+*.pt
+*.pth
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.m4v
+runs/
