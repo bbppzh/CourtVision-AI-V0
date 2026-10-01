@@ -1,6 +1,7 @@
 """Read, annotate, and write a video frame by frame."""
 
 import math
+import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -117,7 +118,15 @@ class VideoProcessor:
             raise
         for backup in backups.values():
             if backup is not None:
-                backup.unlink(missing_ok=True)
+                try:
+                    backup.unlink(missing_ok=True)
+                except OSError as exc:
+                    # Publication has succeeded; leftover backups are a cleanup issue.
+                    print(
+                        f"Warning: Outputs were saved, but could not remove old "
+                        f"backup '{backup}': {exc}",
+                        file=sys.stderr,
+                    )
 
     def process(self, input_path: Path, output_path: Path) -> int:
         """Write annotated MP4 frames and return the number processed."""

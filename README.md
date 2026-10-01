@@ -96,7 +96,7 @@ Use `python main.py --help` for all options. A custom `--tracker` path must poin
 
 Output directories are created automatically. Video, analytics, and heatmap paths must be distinct and end in `.mp4`, `.json`, and `.png` respectively. Processing can be slower than playback; the saved video still uses the source FPS.
 
-Files are staged before publication. Processing or export failures remove temporary files and preserve existing outputs. If a final rename fails, the processor attempts to restore the previous output set. Filesystem failures that prevent restoration report the location of recoverable backups. Publishing three files is not a single atomic filesystem operation, and a power loss during publication cannot be rolled back automatically.
+Files are staged before publication. Processing or export failures remove temporary files and preserve existing outputs. If a final rename fails, the processor attempts to restore the previous output set. Filesystem failures that prevent restoration report the location of recoverable backups. If deleting an old backup fails after successful publication, processing remains successful and a warning identifies the leftover backup; other backups are still cleaned up. Publishing three files is not a single atomic filesystem operation, and a power loss during publication cannot be rolled back automatically.
 
 ### Run the public basketball demo
 
@@ -207,9 +207,9 @@ Run the fast suite:
 python -m pytest -q
 ```
 
-**81 tests pass**, including all original V0 tests. Tests use synthetic boxes, tiny generated videos, and mocked predictions without downloading weights. One test runs the real ByteTrack association algorithm with synthetic detections.
+**82 tests pass**, including all original V0 tests. Tests use synthetic boxes, tiny generated videos, and mocked predictions without downloading weights. One test runs the real ByteTrack association algorithm with synthetic detections.
 
-Coverage includes confidence/device selection, valid IDs and person filtering, weak-detection association, tracker resets, centers, bounded histories and expiry, motion/smoothing/gaps, zero displacement, heatmaps, JSON, no-person videos, FPS/resolution preservation, invalid configuration/paths, output cleanup, and restoring previous files after failures.
+Coverage includes confidence/device selection, valid IDs and person filtering, weak-detection association, tracker resets, centers, bounded histories and expiry, motion/smoothing/gaps, zero displacement, heatmaps, JSON, no-person videos, FPS/resolution preservation, invalid configuration/paths, output cleanup, successful processing despite backup-cleanup warnings, and restoring previous files after failures.
 
 ## Seven Parts to Understand Before Putting V1 on Your CV
 

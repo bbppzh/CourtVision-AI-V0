@@ -132,3 +132,55 @@ def test_reusing_processor_resets_state_and_derives_new_sidecar_names(tmp_path):
     assert processor.heatmap_output.name == "second_heatmap.png"
     assert (tmp_path / "first_tracking.json").read_bytes() == first_report
     assert tracker.start.call_count == 2
+
+
+def test_backup_cleanup_failure_keeps_published_outputs_and_warns(tmp_path, monkeypatch, capsys):
+    input_path = tmp_path / "input.mp4"
+    small_video(input_path)
+    outputs = [tmp_path / name for name in ("tracked.mp4", "tracked_tracking.json", "tracked_heatmap.png")]
+    for path in outputs:
+        path.write_bytes(b"previous output")
+
+    backups = {}
+    original_replace = Path.replace
+    original_unlink = Path.unlink
+
+    def observe_backup(path, destination):
+        if path in outputs:
+            backups[path] = Path(destination)
+        return original_replace(path, destination)
+
+    def fail_one_backup_cleanup(path, *args, **kwargs):
+        if path == backups.get(outputs[0]):
+            raise OSError("Simulated backup cleanup failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "replace", observe_backup)
+    monkeypatch.setattr(Path, "unlink", fail_one_backup_cleanup)
+    tracker = Mock()
+    tracker.track.return_value = []
+    assert VideoProcessor(SimpleNamespace(), tracker).process(input_path, outputs[0]) == 3
+
+    capture = cv2.VideoCapture(str(outputs[0]))
+    try:
+        assert capture.isOpened()
+        decoded = 0
+        while capture.read()[0]:
+            decoded += 1
+        assert decoded == 3
+    finally:
+        capture.release()
+    report = json.loads(outputs[1].read_text())
+    assert report["video"]["frames_processed"] == 3
+    assert report["tracks"] == []
+    image = cv2.imread(str(outputs[2]))
+    assert image.shape == (48, 64, 3)
+    assert not image.any()
+
+    assert len(backups) == 3
+    retained_backup = backups[outputs[0]]
+    assert retained_backup.read_bytes() == b"previous output"
+    assert all(not backups[path].exists() for path in outputs[1:])
+    warning = capsys.readouterr().err
+    assert str(retained_backup) in warning
+    assert "Simulated backup cleanup failure" in warning
