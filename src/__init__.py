@@ -1,1 +1,1 @@
-"""CourtVision AI video detection package."""
+"""CourtVision AI person detection, tracking, and pixel motion analytics."""
