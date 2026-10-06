@@ -11,6 +11,9 @@ from src.detector import Detection
 
 if TYPE_CHECKING:
     from src.tracker import TrackedPerson
+    from src.ball_tracker import BallTrack
+    from src.events import RimROI
+    from src.interaction import PossessionProxy
 
 
 def validate_input_path(path: Path) -> None:
@@ -89,10 +92,10 @@ def draw_tracked_person(
 
 def draw_label(
     frame: np.ndarray, label: str, x: int, y: int, color: tuple[int, int, int],
+    font_scale: float = 0.6,
 ) -> None:
     """Fit a readable label inside the image, including on small demo frames."""
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.6
     thickness = 2
     (text_width, text_height), baseline = cv2.getTextSize(
         label, font, font_scale, thickness
@@ -120,3 +123,31 @@ def draw_label(
         thickness,
         cv2.LINE_AA,
     )
+
+
+def draw_ball(frame: np.ndarray, ball: "BallTrack", history: list[tuple[int, float, float]]) -> None:
+    """Draw an amber sports-ball candidate and its observed, unbroken trail."""
+    color = (0, 170, 255)
+    if len(history) >= 2:
+        points = np.rint([(x, y) for _, x, y in history]).astype(np.int32).reshape((-1, 1, 2))
+        cv2.polylines(frame, [points], False, color, 2, cv2.LINE_AA)
+    x1, y1, x2, y2 = ball["bbox"]
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+    draw_label(frame, f"Ball | {ball['confidence']:.2f}", x1, y1, color, font_scale=0.45)
+
+
+def draw_rim_roi(frame: np.ndarray, roi: "RimROI") -> None:
+    """Draw the manually selected rim region without a large filled label."""
+    color = (200, 200, 200)
+    cv2.rectangle(frame, (roi.x1, roi.y1), (roi.x2, roi.y2), color, 1)
+    text_y = roi.y1 - 5 if roi.y1 >= 16 else min(frame.shape[0] - 2, roi.y2 + 14)
+    cv2.putText(frame, "RIM ROI", (roi.x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(frame, "RIM ROI", (roi.x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
+
+
+def draw_possession_proxy(frame: np.ndarray, proxy: "PossessionProxy", players: list["TrackedPerson"]) -> None:
+    """A question-mark label makes the proximity interpretation explicit."""
+    person = next((person for person in players if person["track_id"] == proxy["player_track_id"]), None)
+    if person is not None:
+        x1, _, _, y2 = person["bbox"]
+        draw_label(frame, "POSSESSION?", x1, min(frame.shape[0] - 8, y2 + 16), (0, 170, 255), font_scale=0.4)

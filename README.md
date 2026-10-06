@@ -2,7 +2,17 @@
 
 An AI-powered basketball video analytics project built with deep learning and computer vision.
 
-This repository is being developed incrementally. **V1 — Player Tracking & Motion Analytics** extends the working V0 detector with ByteTrack IDs, recent trajectories, pixel movement summaries, and an image-coordinate heatmap. The model detects people; it does not distinguish players from other people.
+This repository is being developed incrementally. **V2 — Basketball Event Analytics** adds a pretrained sports-ball baseline, a primary ball trail, possession proxies, and conservative shot candidates around a manually selected rim. V0 detection and V1 ByteTrack IDs, trajectories, motion summaries, and heatmaps remain available.
+
+## V2 Demo
+
+![Player ID, player trail, ball confidence and trajectory, and manual rim ROI](docs/assets/v2-demo.jpg)
+
+The public 960×540 sample runs on CPU with default `yolo26n.pt` weights. It preserves **101 frames at 30 FPS**, keeps player ID **1**, selects visible ball candidates in **40 frames (39.6%)**, and confirms a possession proxy in **6 frames**. The longest continuous ball history contains **27 observations**. This selected frame shows an actual ball trajectory; these counts are observations, not accuracy measurements.
+
+[Analytics JSON](docs/assets/v2-analytics.json) · [Movement heatmap](docs/assets/v2-heatmap.png) · [Validation record](docs/assets/v2-validation.json)
+
+**Real-video shot recognition remains unvalidated.** The clip contains a shot, but missing ball observations interrupt the required approach evidence, so this run reports zero shot-attempt candidates. Synthetic trajectories verify made, missed, and unknown rule outcomes; they do not establish real-video event accuracy. Sample footage: [chonyy/AI-basketball-analysis](https://github.com/chonyy/AI-basketball-analysis/tree/master/static/uploads).
 
 ## V1 Demo
 
@@ -20,14 +30,14 @@ The public basketball sample keeps ByteTrack IDs **1** and **2** across all **14
 
 - [x] V0 — Player Detection
 - [x] V1 — Player Tracking & Motion Analytics
-- [ ] V2 — Basketball Event Analytics
+- [x] V2 — Basketball Event Analytics
 - [ ] V3 — Custom Model Fine-Tuning
 - [ ] V4 — Pose & Advanced Analytics
 
 ## Features
 
 - Reads local video sequentially with OpenCV and loads pretrained COCO YOLO weights once.
-- Filters for COCO `person`, with a configurable confidence threshold.
+- Filters people and sports-ball candidates with separate configurable confidence thresholds.
 - Preserves the source resolution and FPS in an annotated MP4.
 - Selects CUDA when available, otherwise CPU, and prints progress.
 - Validates inputs, creates output directories, and releases video resources after errors.
@@ -40,6 +50,33 @@ The public basketball sample keeps ByteTrack IDs **1** and **2** across all **14
 - Reports cumulative pixel displacement and speed in **px/s**, with optional speed labels.
 - Saves per-track JSON analytics and a PNG movement heatmap automatically.
 - Handles missing IDs, gaps, and videos with no visible people.
+
+### V2 Features
+
+- One YOLO inference per frame for `person` and generic COCO `sports ball`.
+- A dedicated primary ball matcher with motion continuity, separate ball IDs, and bounded trails.
+- Ball boxes, confidence labels, and amber trajectories; no predicted boxes during gaps.
+- Temporally confirmed player–ball proximity, exported as `possession_proxy`.
+- Optional manual rim ROI; the rest of the pipeline works without it.
+- Release, upward motion, and rim approach evidence for shot-attempt candidates.
+- Made/missed candidates only with sequential visible evidence; unresolved attempts remain `unknown`.
+- FPS-based event timestamps, short readable overlays, and extended JSON analytics.
+
+## V2 Architecture
+
+Basketball Video → OpenCV → YOLO → Person + Sports Ball Detection → Player Tracking + Ball Tracking → Interaction Analysis → Shot Candidate State Machine → Event Timeline → Annotated MP4 + JSON + Heatmap
+
+| Module | V2 responsibility |
+| --- | --- |
+| `detector.py` | Resolve the sports-ball class from model names; split one prediction into weak person boxes and filtered ball candidates. |
+| `tracker.py` | Feed precomputed person boxes to official ByteTrack, preserving V1 weak-detection association. |
+| `ball_tracker.py` | Select a primary visible ball using geometry, confidence, and motion continuity; retain bounded history. |
+| `interaction.py` | Normalize distance to player rectangles, confirm proximity, handle overlaps, and apply hysteresis. |
+| `events.py` | Validate manual ROI, reason over temporal evidence, attribute candidates, and record uncertainty. |
+| `analytics.py` | Keep V1 motion fields and add visible-ball, proxy, event, and throughput summaries. |
+| `video_processor.py` | Reset state for each video, coordinate one inference, annotate, and safely publish all outputs. |
+
+The CLI enables V2. Existing Python APIs keep their earlier behavior: `PlayerDetector.detect(frame)` detects people, `PlayerTracker.track(frame)` runs V1 person tracking, and `VideoProcessor(detector, tracker)` runs V1 without basketball analysis. Use `enable_basketball=True` to enable V2 through Python. The new `track_detections()` method avoids a second inference call.
 
 ## V1 Architecture
 
@@ -56,7 +93,7 @@ Basketball Video → OpenCV → YOLO → Person Detection → ByteTrack → Pers
 | `video_processor.py` | Read frames, coordinate the modules, and write the outputs. |
 | `main.py` | Parse CLI options, report progress, and handle normal user errors. |
 
-The original `PlayerDetector.detect(frame)` and `VideoProcessor(detector)` detection-only APIs remain available. Existing CLI arguments continue to work; the CLI now enables V1 tracking by default.
+The original `VideoProcessor(detector)` detection-only API also remains available. Existing CLI arguments continue to work, now with ball and interaction analysis enabled by default.
 
 ## Installation
 
@@ -78,31 +115,78 @@ The first run downloads the small pretrained `yolo26n.pt` weights unless they ar
 Place your basketball video at `data/input/basketball.mp4`. Run:
 
 ```bash
-python main.py --input data/input/basketball.mp4 --output data/output/basketball_tracked.mp4
+python main.py --input data/input/basketball.mp4 --output data/output/basketball_v2.mp4
 ```
 
 This creates:
 
 ```text
-data/output/basketball_tracked.mp4
-data/output/basketball_tracked_tracking.json
-data/output/basketball_tracked_heatmap.png
+data/output/basketball_v2.mp4
+data/output/basketball_v2_tracking.json
+data/output/basketball_v2_heatmap.png
 ```
 
-To configure confidence, trail length, speed labels, and export filenames:
+Without a rim ROI, players, the ball, and possession proxies still run; shot analysis is disabled. Add a rim rectangle for your own video:
 
 ```bash
 python main.py \
   --input data/input/basketball.mp4 \
-  --output data/output/basketball_tracked.mp4 \
+  --output data/output/basketball_v2.mp4 \
   --confidence 0.5 \
   --model yolo26n.pt \
   --tracker bytetrack.yaml \
   --trajectory-length 40 \
+  --ball-confidence 0.25 \
+  --rim-roi 145,40,190,75 \
+  --possession-distance-threshold 0.4 \
+  --possession-min-frames 3 \
   --show-speed \
+  --show-events \
   --analytics-output data/output/basketball_tracking.json \
   --heatmap-output data/output/basketball_heatmap.png
 ```
+
+The ROI above is illustrative: replace it with your video's rim coordinates. `--confidence` filters player outputs; `--ball-confidence` filters sports-ball candidates. The default proximity threshold is a fraction of the player box diagonal, not pixels. `--show-events` displays both proxy indicators and event labels; analytics are exported regardless of this flag. `--model` accepts supported COCO detection checkpoints, including larger models such as `yolo26s.pt`.
+
+### Run the V2 public sample
+
+From the project directory with your virtual environment active:
+
+```bash
+curl --fail --location --output data/input/basketball_v2_sample.mp4 https://raw.githubusercontent.com/chonyy/AI-basketball-analysis/master/static/uploads/sample_video.mp4
+
+python main.py \
+  --input data/input/basketball_v2_sample.mp4 \
+  --output data/output/basketball_v2_sample_annotated.mp4 \
+  --rim-roi 540,193,582,213 \
+  --show-events
+```
+
+Open the resulting MP4 in a local player. The sidecars use `_tracking.json` and `_heatmap.png`. To run without a rim:
+
+```bash
+python main.py --input data/input/basketball_v2_sample.mp4 --output data/output/basketball_v2_no_rim.mp4 --show-events
+```
+
+### Choose a manual rim ROI
+
+Pause the source at a clear frame. Measure a tight rectangle around the rim opening using an image editor's pixel coordinates: `x1,y1,x2,y2`. The origin is top-left; x grows right and y grows down. The four coordinates must be integers, ordered correctly, and inside the source dimensions. The sample's coordinates are for its 960×540 resolution only.
+
+The ROI is drawn as a subtle gray box. V2 has no trained hoop detector. A single fixed ROI is most useful for a stationary camera; moving cameras, zooms, and cuts invalidate it. Do not reuse the sample coordinates for a different video.
+
+### Verified V2 result
+
+| Property | Source | Annotated output | Output without ROI |
+| --- | --- | --- | --- |
+| Resolution | 960×540 | 960×540 | 960×540 |
+| FPS | 30.0 | 30.0 | 30.0 |
+| Fully decoded frames | 101 | 101 | 101 |
+
+Both real runs use default thresholds on CPU. ID 1 is present in every frame, ball candidates appear in 40 frames, and proximity is confirmed in 6 frames. Boxes, actual ball trails, proxy labels, rim ROI, and the heatmap were inspected visually. The recorded ROI run took **2.47 seconds**, approximately **40.94 processing FPS** on this machine. Throughput includes video reading, inference, tracking, annotation, and encoder close; it excludes model loading and sidecar publication. Results vary with hardware and load.
+
+`source_fps` controls playback and event timing. `processing_fps = frames_processed / processing_seconds` describes processing throughput. They are separate quantities.
+
+The older 320×240 UCF101 clip remains a V1 regression sample. With default YOLO26n and a 0.25 ball threshold, it produces zero ball detections. Lowering the threshold to 0.05 with YOLO11n produced background/shoe false positives as well as a few ball observations. It is unsuitable evidence of reliable ball or shot recognition.
 
 Use `python main.py --help` for all options. A custom `--tracker` path must point to a local YAML file whose `tracker_type` is `bytetrack`. Start with the packaged defaults.
 
@@ -150,7 +234,7 @@ YOLO answers **“Where are the people in this frame?”** It predicts a box, cl
 
 ByteTrack answers **“Which detections likely belong to the same person across frames?”** It predicts track motion with a Kalman filter and associates boxes between frames. It first matches stronger detections, then uses weaker detections to recover existing tracks. An ID such as `7` is a temporary tracker identity within one video, not a name, jersey number, or biological identity. Occlusion, missed detections, overlapping people, and large movement can cause an ID switch or a new ID.
 
-`PlayerTracker` uses Ultralytics' documented `BYTETracker` directly, with its packaged configuration. This keeps tracker state separate from YOLO and the V0 detection API. It calls `model.predict()` once per frame, inside `torch.inference_mode()`, requesting only people. The inference threshold is the lower of the user threshold and ByteTrack's low threshold, so weak detections can reach association. The user threshold is then applied to tracked outputs used for visualization and analytics. It still controls which people appear in the output.
+`PlayerTracker` uses Ultralytics' documented `BYTETracker` directly, with its packaged configuration. This keeps tracker state separate from YOLO and the V0 detection API. In V1, `track()` requests only people. In V2, `detect_scene()` calls `model.predict()` once per frame inside `torch.inference_mode()`, requesting people and sports balls, and `track_detections()` associates the separated person boxes. The inference threshold is the lowest of the player display threshold, ByteTrack's low threshold, and the ball threshold. Weak people reach association; the user player threshold is applied after tracking. Ball confidence is filtered separately.
 
 ByteTrack may need another frame to confirm a newly appearing person. Untracked boxes or invalid IDs are skipped. Empty detection frames still update ByteTrack, allowing lost tracks to age out. A fresh tracker is created for each video; ID numbers can start at `1` again in another video.
 
@@ -211,6 +295,92 @@ Trails use `deque(maxlen=40)` by default, configurable with `--trajectory-length
 
 Analytics retain small running summaries and at most five speed samples for each unique ID so departed tracks can appear in the final report. Memory therefore scales with recent IDs × trail length, image size, and the number of unique IDs. Complete trajectories and all video frames are never stored. Many ID switches in a very long video can still increase summary memory.
 
+## Why Sports Ball?
+
+COCO contains a generic `sports ball` category, not a basketball-specific identity. The supplied COCO weights name class 0 `person` and class 32 `sports ball`, but V2 resolves the latter from `model.names` rather than assuming 32. The low-level result always says `sports ball`; interpreting a likely game ball happens in the basketball application layer. This is a pretrained V2 baseline, with no training or fine-tuning.
+
+Balls cover fewer pixels than players, move faster, blur, disappear behind hands/bodies, and change apparent size with perspective. Increasing confidence reduces weak detections but can remove genuine small balls; decreasing it can introduce background objects. A higher visible-ball rate can therefore mean more false positives, not better detection.
+
+## Primary Ball Selection and Gaps
+
+`BallTracker` rejects extreme candidates: the box must have aspect ratio between 1:3 and 3:1, cover at most 5% of the image, and have a finite in-frame center. These scene heuristics do not prove basketball identity.
+
+The first candidate is selected by confidence, with bbox coordinates breaking ties deterministically. Later candidates must lie near a simple constant-velocity prediction. The gate is 12% of the frame diagonal per frame, capped at three frame steps; nearest predicted position takes priority over confidence. A distant stronger detection cannot immediately replace an active ball. This matcher is separate from player ByteTrack state.
+
+Missing detections return `None`: the output does not draw an invented ball. A short gap retains association for up to five frame-index steps, but the displayed history restarts after any missing observation. Longer gaps clear association and the next candidate gets a new logical ball ID. Histories are bounded by `--trajectory-length`, default 40. Ball ID 1 and player ID 1 are independent namespaces; neither identifies an actual object outside this video.
+
+## Possession Proxy
+
+For ball center `(x,y)` and player box `[x1,y1,x2,y2]`:
+
+```text
+dx = max(x1 - x, 0, x - x2)
+dy = max(y1 - y, 0, y - y2)
+normalized_distance = sqrt(dx² + dy²) / player_box_diagonal
+```
+
+A center inside a player's rectangle has distance zero. A ball 20 pixels outside a box with a 100-pixel diagonal has normalized distance 0.2. V2 confirms the nearest plausible player after three consecutive observations within the default 0.4 threshold. It returns unknown if the two closest distances differ by less than 0.05, including overlapping boxes.
+
+A confirmed holder has a wider exit gate, 1.5× the entry threshold. A challenger must also meet the confirmation count, reducing immediate switching. Missing ball/player inputs, a frame gap, or a new ball ID reset confirmation. The proxy can briefly persist while a ball moves away inside that wider gate.
+
+**Image proximity does not prove physical possession.** A pass can cross a player's box, perspective can place separate objects close together, and overlapping players can be indistinguishable. Labels say `POSSESSION?`; JSON says `possession_proxy`. Its `heuristic_score` is ball confidence multiplied by proximity within the exit gate, not a calibrated possession probability.
+
+## Shot Detection
+
+The state machine requires a manual rim ROI:
+
+```text
+IDLE → POSSESSED → RELEASED → ASCENDING
+    → [approaches rim region] → SHOT_CANDIDATE
+    → made_candidate / missed_candidate / unknown → IDLE
+```
+
+1. A stable possession proxy supplies a recent player box and ball ID.
+2. The same ball must separate beyond the entry proximity threshold within 0.75 seconds of that evidence.
+3. Two consecutive smoothed upward observations are required after release. Vertical direction uses the mean of the last three consecutive y differences; decreasing y means upward. Differences within ±1 px/frame are treated as jitter. Gaps reset motion evidence.
+4. The ball must rise at least half a rim-ROI height from the release position, approach within one ROI width horizontally and two ROI heights below the rim, and reduce its distance to the ROI. This is the approach guard, not an independent single-frame shot rule.
+
+At release, attribution uses the most recent stable proxy only if it is at most 0.4 seconds old. Older or uncertain attribution is `null`; no player identity is guessed.
+
+### Outcome evidence
+
+- **Made candidate:** observe the ball above the aligned rim, a downward segment crossing the ROI, then at least two consecutive smoothed downward observations below it with x inside the rim bounds. Segment intersections interpolate only between consecutive visible centers; a gap cannot establish a crossing.
+- **Missed candidate:** after visible above-rim alignment, see at least two downward observations below and horizontally outside the rim, without a qualifying crossing. This deliberately narrow rule will miss some observable misses.
+- **Unknown:** insufficient evidence, a changed ball ID, more than 0.12 seconds missing after an attempt, a two-second timeout, or the clip ending before resolution. No shot-attempt candidate means no outcome entry, rather than an invented miss.
+
+Only one shot is active at a time. Completing it clears the holder/release evidence and applies a 0.75-second cooldown; another attempt needs fresh possession evidence. Event labels last 0.8 seconds. Durations are converted to frames using source FPS.
+
+Attempt/made/missed scores are fixed **0.75 / 0.85 / 0.65** rule-strength labels, respectively. Unknown uses 0. These values are explicitly uncalibrated and do not estimate the probability of a real basket.
+
+Example synthetic trajectory used to validate the temporal chain with ROI `[90,30,110,50]`:
+
+```text
+(25,180) × 3 → (50,160) → (75,120) → (90,90) → (95,65)
+→ (100,20) → (100,15) → (100,35) → (100,55) → (100,70)
+   above rim                    crossing        below × 2
+```
+
+This tests rule sequencing with mocked detections, not real-video accuracy. Real event evaluation requires human annotations and separate held-out videos, including missed detections, occlusions, cuts, and unsuccessful shots.
+
+## V2 Analytics JSON
+
+The V1 roots `video`, `coordinate_system`, `units`, `scientific_warning`, and `tracks` remain unchanged. V2 adds:
+
+| Root | Contents |
+| --- | --- |
+| `basketball` | Selected visible-ball frame count, detection rate, model class, and primary track segment count. |
+| `possession_proxy` | Per-player confirmed-frame counts and unknown frames. |
+| `shot_candidates` | Whether analysis is enabled; attempts, made/missed/unknown counts, and individual shot records. |
+| `events` | Timeline of proxy changes, attempt decisions, and outcome decisions with related IDs and scores. |
+| `event_rules` | Manual ROI, configured thresholds, and score interpretation. |
+| `performance` | Source FPS, processing seconds, processing FPS, and measurement boundaries. |
+
+Frames are **zero-based**. `timestamp_seconds = frame / source_fps`; playback time is independent of processing duration. Proxy changes to unknown use `player_track_id: null`. Shot records contain `start_frame` (release), `decision_frame`, and `outcome_frame`; timeline entries use their decision `frame`.
+
+`detection_rate = frames_with_selected_visible_ball / frames_processed`. It is not precision, recall, or accuracy: without annotated ground truth, selected candidates can include false positives and missed real balls are not measured individually.
+
+The event timeline and per-shot summaries grow with the number of events, while running ball/proxy summaries grow with unique IDs. Recent ball/player trails remain bounded. No raw frames or complete per-frame trajectories are retained in memory.
+
 ## Tests
 
 Run the fast suite:
@@ -219,9 +389,44 @@ Run the fast suite:
 python -m pytest -q
 ```
 
-**82 tests pass**, including all original V0 tests. Tests use synthetic boxes, tiny generated videos, and mocked predictions without downloading weights. One test runs the real ByteTrack association algorithm with synthetic detections.
+**127 tests pass**, including all 82 prior V0/V1 tests. Tests use synthetic boxes, tiny generated videos, and mocked predictions without downloading weights. Real ByteTrack association is also tested with synthetic detections through the shared V2 inference path.
 
 Coverage includes confidence/device selection, valid IDs and person filtering, weak-detection association, tracker resets, centers, bounded histories and expiry, motion/smoothing/gaps, zero displacement, heatmaps, JSON, no-person videos, FPS/resolution preservation, invalid configuration/paths, output cleanup, successful processing despite backup-cleanup warnings, and restoring previous files after failures.
+
+V2 coverage adds dynamic sports-ball class resolution, one shared inference, primary selection/ties, missing balls, geometry gates, ball resets, bounded ball history, normalized proximity, confirmation/hysteresis/overlap ambiguity, missing players, ROI parsing/bounds, release/rising/approach, made/missed/unknown outcomes, stale attribution, duplicate suppression, FPS timestamps, overlay duration, and zero-ball/no-ROI pipeline runs. A full synthetic shot traverses the ball matcher, possession estimator, event analyzer, and JSON export; reusing the processor verifies fresh state between videos.
+
+## V2 Learning Guide
+
+| Question | Explanation |
+| --- | --- |
+| 1. Why is ball detection harder? | The ball has fewer pixels, faster motion, blur, and frequent occlusion; a player usually presents a larger visual target. |
+| 2. What does COCO sports ball mean? | A generic learned category shared by several sports, not proof that the object is a basketball. |
+| 3. How is the primary ball selected? | Plausible geometry, deterministic initial confidence, then proximity to predicted motion before confidence. |
+| 4. What happens during missed detections? | Return unknown, draw no predicted ball, restart trails across gaps, and assign a new segment ID after expiry. |
+| 5. How is possession proxy calculated? | Nearest distance to a player rectangle divided by its diagonal, followed by consecutive-frame confirmation and an exit gate. |
+| 6. Why is it not ground truth? | Image overlap/proximity cannot prove contact or control; passes, perspective, and overlapping players can fool it. |
+| 7. How is vertical direction measured? | Mean consecutive y differences over at most three intervals; negative is up and positive is down. Gaps clear the window. |
+| 8. How does the shot state machine work? | Require stable proximity, separation, repeated rising motion, and rim approach before creating an attempt. |
+| 9. What does the rim ROI do? | Supplies a manually measured image region for approach, above/crossing/below tests; without it, shot analysis is disabled. |
+| 10. What supports a made candidate? | Above-rim evidence, a consecutive downward crossing, and at least two downward observations below the aligned rim. |
+| 11. Why retain unknown outcomes? | Disappearance, changed IDs, timeouts, and interrupted crossing evidence cannot support a made or missed conclusion. |
+| 12. How are duplicates suppressed? | One active attempt, cleared release evidence, a cooldown, and fresh possession required for another attempt. |
+| 13. How are shots attributed? | Use the recent stable proxy for the same ball; stale or ambiguous evidence yields a null player ID. |
+| 14. What fails most often? | Small/occluded balls, background false positives, detector jitter, player overlap/ID switches, camera cuts/movement, and inaccurate ROI. |
+| 15. What should V3 improve? | A basketball-specific annotated dataset and fine-tuning should improve ball recall/localization and reduce sports-ball/background confusion; held-out evaluation must measure it. |
+
+## Ten V2 Code Sections to Understand Before Putting This on Your CV
+
+1. [`PlayerDetector.detect_scene()`](src/detector.py): shared inference, dynamic class names, separate thresholds, CPU/CUDA, and inference mode.
+2. [`PlayerTracker.track_detections()`](src/tracker.py): official ByteTrack association of precomputed weak person boxes, separate from the ball matcher.
+3. [`BallTracker._plausible()` / `update()`](src/ball_tracker.py): deterministic selection, velocity prediction, motion gates, and logical IDs.
+4. [`BallTracker.history` / `reset()`](src/ball_tracker.py): bounded deques, missing observations, trail breaks, and per-video lifecycle.
+5. [`normalized_box_distance()`](src/interaction.py): rectangle geometry and resolution-relative proximity.
+6. [`PossessionEstimator.update()`](src/interaction.py): temporal confirmation, ambiguity, unknown inputs, and hysteresis.
+7. [`RimROI.parse()` / `validate_dimensions()`](src/events.py): manual image coordinates and early validation.
+8. [`EventAnalyzer.update()`](src/events.py): smoothed direction, release/rising/approach states, and recent-player attribution.
+9. [`EventAnalyzer._observe_rim()` / `_finish_shot()` / `_emit()`](src/events.py): sequential outcomes, uncertainty, duplicate suppression, timestamps, and uncalibrated scores.
+10. [`VideoProcessor.process()`](src/video_processor.py) with [`BasketballAnalytics` / `MotionAnalytics.save_json()`](src/analytics.py): preserve metadata and V1 report fields, count visible candidates, measure throughput, stage outputs, and clean up resources.
 
 ## Seven Parts to Understand Before Putting V1 on Your CV
 
@@ -247,6 +452,10 @@ Coverage includes confidence/device selection, valid IDs and person filtering, w
 | IDs flicker or change | Try clearer footage and check detector confidence; occlusion and overlapping people can break association. |
 | Large px/s values | Check camera motion, box jitter, and ID switches; values are not physical speed. |
 | Slow processing on CPU | Start with a short clip. Processing duration does not change output playback FPS. |
+| No ball detections | Use clearer/larger balls, compare a larger COCO model, and inspect confidence; lowering the threshold can create false positives. |
+| V2 needs sports ball weights | Use COCO detection weights with both `person` and `sports ball` model names. |
+| No shot candidates | Check ROI alignment and ball visibility across release, rising, and approach; zero candidates can be a conservative result. |
+| Unknown shot outcome | Inspect ball gaps, ID changes, crossing evidence, ROI, and clip end; unknown is intentional when evidence is insufficient. |
 
 ## Project Structure
 
@@ -256,9 +465,12 @@ courtvision-ai/
 │   ├── __init__.py
 │   ├── detector.py
 │   ├── tracker.py
+│   ├── ball_tracker.py
 │   ├── track_history.py
 │   ├── analytics.py
 │   ├── heatmap.py
+│   ├── interaction.py
+│   ├── events.py
 │   ├── video_processor.py
 │   └── utils.py
 ├── data/
@@ -271,7 +483,12 @@ courtvision-ai/
 │   ├── test_analytics.py
 │   ├── test_heatmap.py
 │   ├── test_v1_pipeline.py
+│   ├── test_ball_tracker.py
+│   ├── test_interaction.py
+│   ├── test_events.py
+│   ├── test_v2_pipeline.py
 │   └── test_video_processor.py
+├── docs/assets/                  # Small demo images and example analytics
 ├── main.py
 ├── requirements.txt
 ├── .gitignore
@@ -287,7 +504,12 @@ The data folders are kept in Git; videos, `.pt` weights, and generated JSON/PNG 
 - Tracking quality depends on detector accuracy, camera angle, lighting, resolution, and hardware.
 - Pixel motion is perspective-dependent and includes camera movement and bounding-box jitter.
 - The heatmap uses image coordinates; no court calibration/homography is implemented.
-- No basketball detection/tracking, shot detection, team recognition, or pose estimation.
+- Generic sports-ball detection is not basketball-specific; small, blurred, and occluded balls are often missed, and background objects can be selected.
+- Possession is an image-proximity proxy; it may persist briefly after release and cannot prove physical possession.
+- Rim coordinates are manual; V2 has no automatic hoop detection and a fixed ROI does not follow camera movement or cuts.
+- Events are heuristics, not ground truth. Conservative rules can miss real shots; made/missed attribution can remain unknown or null.
+- Real-video event accuracy has not been established. Synthetic successes test the rules, not detection or event precision/recall.
+- No court calibration, homography, physical coordinates, custom fine-tuning, team recognition, or pose estimation.
 - Source audio is not copied; OpenCV writes annotated frames only.
 - OpenCV's `mp4v` playback depends on local codecs, and width/height must be even.
 - Source FPS is treated as fixed; variable-frame-rate timestamps are not preserved.
@@ -295,7 +517,7 @@ The data folders are kept in Git; videos, `.pt` weights, and generated JSON/PNG 
 
 ## Future Work
 
-V2 will explore basketball event analytics, beginning with appropriately evaluated ball and event detection. Court calibration is needed before introducing real-world movement measurements. V1 deliberately contains no V2 features.
+V3 will focus on an annotated basketball dataset and custom detector fine-tuning, especially small/blurred balls and hard background negatives. Separate training and held-out videos by recording/camera to avoid leakage; evaluate ball precision/recall and temporal event errors rather than equating detection rate with quality. Improved ball observations should then support better event evidence. No V3 training is included in this version.
 
 ## References
 
@@ -303,3 +525,5 @@ V2 will explore basketball event analytics, beginning with appropriately evaluat
 - [Official Ultralytics ByteTrack API](https://docs.ultralytics.com/reference/trackers/byte_tracker/)
 - [Ultralytics prediction API](https://docs.ultralytics.com/modes/predict/)
 - [Ultralytics COCO class list](https://docs.ultralytics.com/datasets/detect/coco/)
+- [Supported YOLO26 detection weights](https://docs.ultralytics.com/models/yolo26/)
+- [V2 public sample source](https://github.com/chonyy/AI-basketball-analysis/tree/master/static/uploads)
