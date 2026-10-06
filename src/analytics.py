@@ -176,13 +176,21 @@ class MotionAnalytics:
 class BasketballAnalytics:
     """Running visible-ball and possession-proxy counts; never an accuracy score."""
 
-    def __init__(self) -> None:
+    def __init__(self, trace_ball_frames: bool = False) -> None:
         self.frames_detected = 0
         self.unknown_frames = 0
         self.player_frames: dict[int, int] = {}
         self.ball_track_ids: set[int] = set()
+        # Per-frame selected ball ID, or None when no ball was observed. This is
+        # the raw observation sequence an evaluation needs to compare against
+        # human labels; it is a trace, not a score. It is off by default because
+        # it grows with clip length.
+        self.trace_ball_frames = trace_ball_frames
+        self.ball_track_by_frame: list[int | None] = []
 
     def update(self, ball: BallTrack | None, proxy: PossessionProxy | None) -> None:
+        if self.trace_ball_frames:
+            self.ball_track_by_frame.append(None if ball is None else ball["ball_track_id"])
         if ball is not None:
             self.frames_detected += 1
             self.ball_track_ids.add(ball["ball_track_id"])
@@ -193,13 +201,16 @@ class BasketballAnalytics:
             self.player_frames[identity] = self.player_frames.get(identity, 0) + 1
 
     def to_dict(self, frames_processed: int) -> dict:
+        summary = {
+            "model_class": "sports ball", "frames_detected": self.frames_detected,
+            "detection_rate": self.frames_detected / frames_processed if frames_processed else 0.0,
+            "primary_ball_tracks": len(self.ball_track_ids),
+            "rate_definition": "Frames with a selected visible sports-ball candidate / frames processed; not precision, recall, or accuracy.",
+        }
+        if self.trace_ball_frames:
+            summary["ball_track_by_frame"] = self.ball_track_by_frame[:frames_processed]
         return {
-            "basketball": {
-                "model_class": "sports ball", "frames_detected": self.frames_detected,
-                "detection_rate": self.frames_detected / frames_processed if frames_processed else 0.0,
-                "primary_ball_tracks": len(self.ball_track_ids),
-                "rate_definition": "Frames with a selected visible sports-ball candidate / frames processed; not precision, recall, or accuracy.",
-            },
+            "basketball": summary,
             "possession_proxy": {
                 "player_frames": {str(identity): count for identity, count in sorted(self.player_frames.items())},
                 "unknown_frames": self.unknown_frames,

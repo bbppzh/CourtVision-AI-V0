@@ -182,7 +182,7 @@ The ROI is drawn as a subtle gray box. V2 has no trained hoop detector. A single
 | FPS | 30.0 | 30.0 | 30.0 |
 | Fully decoded frames | 101 | 101 | 101 |
 
-Both real runs use default thresholds on CPU. ID 1 is present in every frame, ball candidates appear in 40 frames, and proximity is confirmed in 6 frames. Boxes, actual ball trails, proxy labels, rim ROI, and the heatmap were inspected visually. The recorded ROI run took **2.47 seconds**, approximately **40.94 processing FPS** on this machine. Throughput includes video reading, inference, tracking, annotation, and encoder close; it excludes model loading and sidecar publication. Results vary with hardware and load.
+Both real runs use default thresholds on CPU. ID 1 is present in every frame, ball candidates appear in 40 frames, and proximity is confirmed in 6 frames. Boxes, actual ball trails, proxy labels, rim ROI, and the heatmap were inspected visually. The recorded ROI run took **2.47 seconds**, approximately **40.94 processing FPS** on this machine. Repeats after the passage and gate changes took 2.38-5.59 seconds (18.08-42.43 processing FPS) and produced the same 40/101 ball frames, 1 player track, 3 ball segments and 0 attempts, with `basketball` keys identical to the version before the trace was added. Throughput includes video reading, inference, tracking, annotation, and encoder close; it excludes model loading and sidecar publication. Results vary with hardware and load.
 
 `source_fps` controls playback and event timing. `processing_fps = frames_processed / processing_seconds` describes processing throughput. They are separate quantities.
 
@@ -305,7 +305,7 @@ Balls cover fewer pixels than players, move faster, blur, disappear behind hands
 
 `BallTracker` rejects extreme candidates: the box must have aspect ratio between 1:3 and 3:1, cover at most 5% of the image, and have a finite in-frame center. These scene heuristics do not prove basketball identity.
 
-The first candidate is selected by confidence, with bbox coordinates breaking ties deterministically. Later candidates must lie near a simple constant-velocity prediction. The gate is 12% of the frame diagonal per frame, capped at three frame steps; nearest predicted position takes priority over confidence. A distant stronger detection cannot immediately replace an active ball. This matcher is separate from player ByteTrack state.
+The first candidate is selected by confidence, with bbox coordinates breaking ties deterministically. Later candidates must lie near a simple constant-velocity prediction. The gate is a **speed limit**, not a per-frame distance: 12% of the frame diagonal per second at the nominal 24 FPS, multiplied by the elapsed seconds and widened by the last observed ball speed so a slowing flight is not rejected for missing a prediction. A fixed pixels-per-frame limit would accept a 600 px/s ball at 24 FPS and reject the same physical flight at 120 FPS. Nearest predicted position takes priority over confidence. A distant stronger detection cannot immediately replace an active ball. This matcher is separate from player ByteTrack state.
 
 Missing detections return `None`: the output does not draw an invented ball. A short gap retains association for up to five frame-index steps, but the displayed history restarts after any missing observation. Longer gaps clear association and the next candidate gets a new logical ball ID. Histories are bounded by `--trajectory-length`, default 40. Ball ID 1 and player ID 1 are independent namespaces; neither identifies an actual object outside this video.
 
@@ -337,16 +337,20 @@ IDLE → POSSESSED → RELEASED → ASCENDING
 
 1. A stable possession proxy supplies a recent player box and ball ID.
 2. The same ball must separate beyond the entry proximity threshold within 0.75 seconds of that evidence.
-3. Two consecutive smoothed upward observations are required after release. Vertical direction uses the mean of the last three consecutive y differences; decreasing y means upward. Differences within ±1 px/frame are treated as jitter. Gaps reset motion evidence.
+3. Upward motion is required after release, measured in **pixels per second**. A least-squares slope over the last 0.08 seconds of visible centers gives the vertical speed; the sign is only called once the window holds at least three observations spanning at least 0.04 seconds and the speed passes 36 px/s. Treating ±1 px/frame as jitter would mean 24 px/s at 24 FPS but 120 px/s at 120 FPS, so the limit is time based instead. Gaps clear the window rather than being bridged, and because dense sampling only repeats one physical motion, a single confirmed direction is enough once the window is satisfied. ASCENDING latches for the rest of the flight.
 4. The ball must rise at least half a rim-ROI height from the release position, approach within one ROI width horizontally and two ROI heights below the rim, and reduce its distance to the ROI. This is the approach guard, not an independent single-frame shot rule.
 
 At release, attribution uses the most recent stable proxy only if it is at most 0.4 seconds old. Older or uncertain attribution is `null`; no player identity is guessed.
 
 ### Outcome evidence
 
-- **Made candidate:** observe the ball above the aligned rim, a downward segment crossing the ROI, then at least two consecutive smoothed downward observations below it with x inside the rim bounds. Segment intersections interpolate only between consecutive visible centers; a gap cannot establish a crossing.
-- **Missed candidate:** after visible above-rim alignment, see at least two downward observations below and horizontally outside the rim, without a qualifying crossing. This deliberately narrow rule will miss some observable misses.
+A passage is confirmed only by an **observed** downward walk through the ROI. The ball moves through three states as it is seen: above the top edge while horizontally inside the rim width, then inside the rim band, then below the bottom edge. Both boundaries must be observed, and the interpolated bottom-edge crossing must still be inside the rim width.
+
+- **Made candidate:** the confirmed crossing, then the ball seen falling below the bottom edge with x inside the rim bounds for at least two observations counted from the crossing step. Interpolation runs only between two consecutive visible centers.
+- **Missed candidate:** after the ball is seen above the rim, at least two downward observations below and horizontally outside the rim, with no confirmed crossing. This deliberately narrow rule will miss some observable misses.
 - **Unknown:** insufficient evidence, a changed ball ID, more than 0.12 seconds missing after an attempt, a two-second timeout, or the clip ending before resolution. No shot-attempt candidate means no outcome entry, rather than an invented miss.
+
+Entering the ROI from above is not by itself a passage. When the ball leaves through the **side** while still inside the rim band, or a gap hides a boundary, the partial crossing is discarded and the ball must be seen above the rim again before a later downward step can complete one. That is what stops a sideways exit followed by aligned observations below the rim from becoming a made candidate: such an attempt ends `unknown` unless the ball is genuinely seen to fall back down through the opening.
 
 Only one shot is active at a time. Completing it clears the holder/release evidence and applies a 0.75-second cooldown; another attempt needs fresh possession evidence. Event labels last 0.8 seconds. Durations are converted to frames using source FPS.
 
@@ -355,12 +359,14 @@ Attempt/made/missed scores are fixed **0.75 / 0.85 / 0.65** rule-strength labels
 Example synthetic trajectory used to validate the temporal chain with ROI `[90,30,110,50]`:
 
 ```text
-(25,180) × 3 → (50,160) → (75,120) → (90,90) → (95,65)
+(25,180) × 3 → (85,115) → (90,90) → (95,65)
 → (100,20) → (100,15) → (100,35) → (100,55) → (100,70)
    above rim                    crossing        below × 2
 ```
 
-This tests rule sequencing with mocked detections, not real-video accuracy. Real event evaluation requires human annotations and separate held-out videos, including missed detections, occlusions, cuts, and unsuccessful shots.
+The reviewed version of this trajectory drifted to `(120,55)` and then back to `(108,70)`, leaving through the side of the rim band on the way down. That is now pinned as a regression: the ball is seen above the rim, then seen falling inside the rim's x-range only after it left the band, so the attempt stays `unknown` and never becomes a made candidate.
+
+These tests cover rule sequencing with mocked detections, not real-video accuracy. Real event evaluation requires human annotations and separate held-out videos, including missed detections, occlusions, cuts, and unsuccessful shots; see **Evaluating Real Clips**.
 
 ## V2 Analytics JSON
 
@@ -368,7 +374,7 @@ The V1 roots `video`, `coordinate_system`, `units`, `scientific_warning`, and `t
 
 | Root | Contents |
 | --- | --- |
-| `basketball` | Selected visible-ball frame count, detection rate, model class, and primary track segment count. |
+| `basketball` | Selected visible-ball frame count, detection rate, model class, primary track segment count, and the per-frame trace `ball_track_by_frame`. |
 | `possession_proxy` | Per-player confirmed-frame counts and unknown frames. |
 | `shot_candidates` | Whether analysis is enabled; attempts, made/missed/unknown counts, and individual shot records. |
 | `events` | Timeline of proxy changes, attempt decisions, and outcome decisions with related IDs and scores. |
@@ -377,9 +383,51 @@ The V1 roots `video`, `coordinate_system`, `units`, `scientific_warning`, and `t
 
 Frames are **zero-based**. `timestamp_seconds = frame / source_fps`; playback time is independent of processing duration. Proxy changes to unknown use `player_track_id: null`. Shot records contain `start_frame` (release), `decision_frame`, and `outcome_frame`; timeline entries use their decision `frame`.
 
+`basketball.ball_track_by_frame` is written only with `--trace-ball-frames`, and holds one entry per processed frame: the selected ball track ID, or `null` when no ball was observed. It records what the pipeline saw and claims nothing about correctness; the evaluation tool reads it to compare against human labels. It is opt-in because it grows with clip length, and it is additive, so existing readers of the basketball summary keep working either way.
+
 `detection_rate = frames_with_selected_visible_ball / frames_processed`. It is not precision, recall, or accuracy: without annotated ground truth, selected candidates can include false positives and missed real balls are not measured individually.
 
-The event timeline and per-shot summaries grow with the number of events, while running ball/proxy summaries grow with unique IDs. Recent ball/player trails remain bounded. No raw frames or complete per-frame trajectories are retained in memory.
+The event timeline and per-shot summaries grow with the number of events, while running ball/proxy summaries grow with unique IDs. Recent ball/player trails remain bounded. The optional per-frame ball trace grows with clip length by one small integer or `null` per frame. No raw frames are retained in memory.
+
+## Evaluating Real Clips
+
+`detection_rate` says how often a ball was drawn, not how often it was right. Measuring accuracy needs human labels on clips the thresholds were not chosen on.
+
+Keep two sets apart:
+
+- **Tuning clips.** Used to pick the rim ROI, confidences, and the possession threshold. Their numbers are fit, not evidence.
+- **Evaluation clips.** Labeled by hand, never used to choose a threshold. Only these are scored.
+
+Label one JSON file per clip, then score:
+
+```bash
+python main.py --input eval/clips/a.mp4 --output data/output/eval_a.mp4 --trace-ball-frames
+python evaluate_v2.py \
+  --predictions data/output/eval_a_tracking.json data/output/eval_b_tracking.json \
+  --labels eval/labels/a.json eval/labels/b.json \
+  --tuning-clips basketball_v2_sample \
+  --tolerance-frames 15 \
+  --output eval/report.json
+```
+
+A label file is `clip_id`, `fps`, a `ball` entry per frame, and one `shots` entry per real attempt. `human_labeled` must be `true` for a clip to be scored without `--allow-unlabeled`. `python evaluate_v2.py --help` prints the full shape, and `src/evaluation.py` documents each field. A `--tuning-manifest` JSON with a `tuning_clips` list is accepted instead of naming every clip on the command line.
+
+The report measures four separate things, because they fail separately:
+
+| Axis | What it answers |
+| --- | --- |
+| Ball precision / recall / F1 | Was the ball selected when it was visible, and only then? |
+| Tracking continuity | Across frames a human marked visible, did one ID carry the ball, and how often did the ID restart? |
+| Shot-event precision / recall | Were real attempts found, and were invented attempts avoided? Made and missed events are scored separately. |
+| Outcome errors | On matched attempts, was `made`/`missed` right? Wrong and `unknown` are counted apart. |
+
+Three rules are enforced rather than documented:
+
+- **Tuning and evaluation clips must be disjoint.** `evaluate_v2.py` refuses to run when a clip ID appears in both sets, so the same clip cannot be tuned on and then scored.
+- **Undefined ratios stay `undefined`.** A metric with no denominator is reported as `None`, never as `0.0` or a perfect score.
+- **Labels must be human.** Without `human_labeled: true` (or an explicit `--allow-unlabeled`) the tool exits non-zero, and the report records that the numbers describe label agreement, not accuracy.
+
+The tool also refuses to fold abstentions into accuracy: `outcome_accuracy_on_decided` is computed over decided attempts only, and the `unknown` count and rate are reported next to it. Frame-level ball precision counts a selected ball as a true positive even when it is the wrong object, because the pipeline does not export per-frame boxes; the report states this and leaves localization `undefined` instead of assuming it. No V2 numbers are quoted in this README, because no evaluation clip has been hand-labeled yet, and a number without labels would be a detection rate wearing an accuracy label.
 
 ## Tests
 
@@ -389,11 +437,13 @@ Run the fast suite:
 python -m pytest -q
 ```
 
-**127 tests pass**, including all 82 prior V0/V1 tests. Tests use synthetic boxes, tiny generated videos, and mocked predictions without downloading weights. Real ByteTrack association is also tested with synthetic detections through the shared V2 inference path.
+**190 tests pass**, including all 82 prior V0/V1 tests. Tests use synthetic boxes, tiny generated videos, and mocked predictions without downloading weights. Real ByteTrack association is also tested with synthetic detections through the shared V2 inference path.
 
 Coverage includes confidence/device selection, valid IDs and person filtering, weak-detection association, tracker resets, centers, bounded histories and expiry, motion/smoothing/gaps, zero displacement, heatmaps, JSON, no-person videos, FPS/resolution preservation, invalid configuration/paths, output cleanup, successful processing despite backup-cleanup warnings, and restoring previous files after failures.
 
 V2 coverage adds dynamic sports-ball class resolution, one shared inference, primary selection/ties, missing balls, geometry gates, ball resets, bounded ball history, normalized proximity, confirmation/hysteresis/overlap ambiguity, missing players, ROI parsing/bounds, release/rising/approach, made/missed/unknown outcomes, stale attribution, duplicate suppression, FPS timestamps, overlay duration, and zero-ball/no-ROI pipeline runs. A full synthetic shot traverses the ball matcher, possession estimator, event analyzer, and JSON export; reusing the processor verifies fresh state between videos.
+
+Frame-rate and crossing coverage is explicit: one continuous flight is sampled at 24, 30, 60 and 120 FPS and must produce the same verdict, stationary jitter must start nothing, a speed below the limit must stay undecided at every rate, and a missing observation must never fabricate a position. The side-exit regression from the reviewed PR is pinned end to end through `BallTracker`, `PossessionEstimator` and `EventAnalyzer`. Evaluation metrics are covered with hand-written fixtures, including the rule that a clip cannot be both a tuning clip and an evaluation clip.
 
 ## V2 Learning Guide
 
@@ -405,7 +455,7 @@ V2 coverage adds dynamic sports-ball class resolution, one shared inference, pri
 | 4. What happens during missed detections? | Return unknown, draw no predicted ball, restart trails across gaps, and assign a new segment ID after expiry. |
 | 5. How is possession proxy calculated? | Nearest distance to a player rectangle divided by its diagonal, followed by consecutive-frame confirmation and an exit gate. |
 | 6. Why is it not ground truth? | Image overlap/proximity cannot prove contact or control; passes, perspective, and overlapping players can fool it. |
-| 7. How is vertical direction measured? | Mean consecutive y differences over at most three intervals; negative is up and positive is down. Gaps clear the window. |
+| 7. How is vertical direction measured? | A least-squares slope in pixels per second over the last 0.08 seconds of visible centers, confirmed only with at least three observations spanning 0.04 seconds. Gaps clear the window. |
 | 8. How does the shot state machine work? | Require stable proximity, separation, repeated rising motion, and rim approach before creating an attempt. |
 | 9. What does the rim ROI do? | Supplies a manually measured image region for approach, above/crossing/below tests; without it, shot analysis is disabled. |
 | 10. What supports a made candidate? | Above-rim evidence, a consecutive downward crossing, and at least two downward observations below the aligned rim. |
@@ -471,6 +521,7 @@ courtvision-ai/
 │   ├── heatmap.py
 │   ├── interaction.py
 │   ├── events.py
+│   ├── evaluation.py
 │   ├── video_processor.py
 │   └── utils.py
 ├── data/
@@ -486,10 +537,12 @@ courtvision-ai/
 │   ├── test_ball_tracker.py
 │   ├── test_interaction.py
 │   ├── test_events.py
+│   ├── test_evaluation.py
 │   ├── test_v2_pipeline.py
 │   └── test_video_processor.py
 ├── docs/assets/                  # Small demo images and example analytics
 ├── main.py
+├── evaluate_v2.py
 ├── requirements.txt
 ├── .gitignore
 └── README.md
@@ -508,7 +561,10 @@ The data folders are kept in Git; videos, `.pt` weights, and generated JSON/PNG 
 - Possession is an image-proximity proxy; it may persist briefly after release and cannot prove physical possession.
 - Rim coordinates are manual; V2 has no automatic hoop detection and a fixed ROI does not follow camera movement or cuts.
 - Events are heuristics, not ground truth. Conservative rules can miss real shots; made/missed attribution can remain unknown or null.
-- Real-video event accuracy has not been established. Synthetic successes test the rules, not detection or event precision/recall.
+- Real-video event accuracy has not been established. Synthetic successes test the rules, not detection or event precision/recall. `evaluate_v2.py` measures it, but no clip has been hand-labeled yet, so this README quotes no accuracy number.
+- Frame-level ball precision counts any selected ball, so a confidently selected spectator shoe scores as a true positive when the ball is visible. Localization needs a separate box trace and is reported as undefined.
+- Sampling limits recall honestly. A 24 FPS clip can step over the whole rim band, so a real passage that was never observed stays `unknown` instead of being guessed at.
+- A gap longer than 0.12 seconds after an attempt ends it as `unknown`, so short occlusions near the rim cost real detections.
 - No court calibration, homography, physical coordinates, custom fine-tuning, team recognition, or pose estimation.
 - Source audio is not copied; OpenCV writes annotated frames only.
 - OpenCV's `mp4v` playback depends on local codecs, and width/height must be even.
@@ -517,7 +573,7 @@ The data folders are kept in Git; videos, `.pt` weights, and generated JSON/PNG 
 
 ## Future Work
 
-V3 will focus on an annotated basketball dataset and custom detector fine-tuning, especially small/blurred balls and hard background negatives. Separate training and held-out videos by recording/camera to avoid leakage; evaluate ball precision/recall and temporal event errors rather than equating detection rate with quality. Improved ball observations should then support better event evidence. No V3 training is included in this version.
+V3 will focus on an annotated basketball dataset and custom detector fine-tuning, especially small/blurred balls and hard background negatives. Separate training and held-out videos by recording/camera to avoid leakage; evaluate ball precision/recall and temporal event errors rather than equating detection rate with quality. `evaluate_v2.py` is the measurement half of that plan and already enforces the separation; what is still missing is hand-labeled clips. Improved ball observations should then support better event evidence. No V3 training is included in this version.
 
 ## References
 

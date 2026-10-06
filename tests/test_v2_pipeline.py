@@ -136,6 +136,28 @@ def test_synthetic_shot_runs_through_ball_proxy_events_and_json(tmp_path):
         assert report["events"][-1]["timestamp_seconds"] == pytest.approx((len(path) - 1) / 30)
 
 
+@pytest.mark.parametrize("trace,expected", [(False, False), (True, True)])
+def test_ball_frame_trace_is_opt_in(tmp_path, trace, expected):
+    source, output = tmp_path / "input.mp4", tmp_path / "v2.mp4"
+    tiny_video(source)
+    detector, tracker = components()
+    processor = VideoProcessor(detector, tracker, enable_basketball=True, trace_ball_frames=trace)
+    assert processor.process(source, output) == 4
+    report = json.loads(processor.analytics_output.read_text())
+    assert ("ball_track_by_frame" in report["basketball"]) is expected
+    if expected:
+        assert report["basketball"]["ball_track_by_frame"] == [1, 1, 1, 1]
+
+
+def test_trace_flag_is_parsed_and_defaults_off(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["main.py", "--input", "in.mp4", "--output", "out.mp4"])
+    assert main.parse_args().trace_ball_frames is False
+    monkeypatch.setattr(
+        "sys.argv", ["main.py", "--input", "in.mp4", "--output", "out.mp4", "--trace-ball-frames"],
+    )
+    assert main.parse_args().trace_ball_frames is True
+
+
 @pytest.mark.parametrize("flag,value", [("--ball-confidence", "nan"), ("--ball-confidence", "2"),
                                       ("--possession-min-frames", "0"), ("--possession-distance-threshold", "0")])
 def test_invalid_v2_cli_configuration(monkeypatch, flag, value):

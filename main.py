@@ -30,6 +30,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--possession-distance-threshold", type=float, default=0.4, help="Maximum ball-to-box distance / player box diagonal")
     parser.add_argument("--possession-min-frames", type=int, default=3, help="Consecutive observations to confirm a possession proxy")
     parser.add_argument("--show-events", action="store_true", help="Show possession-proxy and event-candidate labels")
+    parser.add_argument("--trace-ball-frames", action="store_true",
+                        help="Export a per-frame ball track ID in the JSON for evaluation; grows with clip length")
     args = parser.parse_args()
     if not 0.0 <= args.confidence <= 1.0:
         parser.error("--confidence must be between 0 and 1")
@@ -64,6 +66,7 @@ def main() -> int:
             possession_distance_threshold=getattr(args, "possession_distance_threshold", 0.4),
             possession_min_frames=getattr(args, "possession_min_frames", 3),
             show_events=getattr(args, "show_events", False),
+            trace_ball_frames=getattr(args, "trace_ball_frames", False),
         )
         print(f"Device: {detector.device}")
         print("Tracker: ByteTrack")

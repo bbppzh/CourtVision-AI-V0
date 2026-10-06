@@ -108,3 +108,76 @@ def test_extreme_scene_boxes_are_rejected():
     candidate = ball(20, 20)
     candidate["bbox"] = [0, 0, 300, 200]
     assert tracker.update([candidate, ball(-10, 20)], 0) is None
+
+
+FPS_CASES = [24, 30, 60, 120]
+# A fast diagonal flight through the middle of a 320x240 frame, in px/s.
+FLIGHT_SPEED = 600.0
+FLIGHT_ORIGIN = (60.0, 200.0)
+FLIGHT_VELOCITY = (60.0, -240.0)
+FLIGHT_SECONDS = 0.8
+
+
+def moving_ball(origin, velocity, fps, step):
+    return ball(origin[0] + velocity[0] * step / fps, origin[1] + velocity[1] * step / fps)
+
+
+@pytest.mark.parametrize("fps", FPS_CASES)
+def test_one_physical_speed_is_tracked_at_every_frame_rate(fps):
+    """The same flight must keep one ball ID at 24, 30, 60 and 120 FPS.
+
+    The old pixels-per-frame gate let a constant 600 px/s ball through at
+    24 FPS but rejected it at 120 FPS, where the same speed moves 12x fewer
+    pixels between frames relative to the gate.
+    """
+    tracker = BallTracker(320, 240, fps=float(fps))
+    ids = set()
+    for step in range(int(FLIGHT_SECONDS * fps)):
+        track = tracker.update([moving_ball(FLIGHT_ORIGIN, FLIGHT_VELOCITY, fps, step)], step)
+        assert track is not None, f"{fps} FPS lost the ball at step {step}"
+        ids.add(track["ball_track_id"])
+    assert ids == {1}
+
+
+@pytest.mark.parametrize("fps", FPS_CASES)
+def test_sustained_change_of_speed_keeps_one_ball_id(fps):
+    """A flight that slows near the apex must not be dropped or re-numbered.
+
+    A fixed pixels-per-frame gate treats the slowdown as a different ball
+    because the prediction keeps extrapolating the fast approach.
+    """
+    tracker = BallTracker(320, 240, fps=float(fps))
+    ids, y = set(), 200.0
+    for step in range(int(1.4 * fps)):
+        y -= (600.0 if y > 120 else 60.0) / fps
+        track = tracker.update([ball(100.0, y)], step)
+        assert track is not None, f"{fps} FPS dropped the ball at step {step} (y={y:.1f})"
+        ids.add(track["ball_track_id"])
+    assert ids == {1}
+
+
+def test_gap_keeps_the_id_but_never_fabricates_history():
+    tracker = BallTracker(320, 240, max_gap_frames=5, fps=30.0)
+    tracker.update([ball(100, 30)], 0)
+    assert tracker.update([], 1) is None
+    assert tracker.update([], 2) is None
+    assert not tracker.history
+    resumed = tracker.update([ball(104, 40)], 3)
+    assert resumed is not None and resumed["ball_track_id"] == 1
+    # History restarts at the resumed observation; the gap is never bridged.
+    assert list(tracker.history) == [(3, 104, 40)]
+
+
+def test_gap_beyond_the_limit_starts_a_new_ball_id():
+    tracker = BallTracker(320, 240, max_gap_frames=5, fps=30.0)
+    tracker.update([ball(100, 30)], 0)
+    assert tracker.update([], 3) is None
+    restarted = tracker.update([ball(100, 30)], 6)
+    assert restarted is not None and restarted["ball_track_id"] == 2
+
+
+def test_ball_tracker_rejects_invalid_fps():
+    with pytest.raises(ValueError, match="FPS"):
+        BallTracker(320, 240, fps=0)
+    with pytest.raises(ValueError, match="FPS"):
+        BallTracker(320, 240, fps=float("nan"))

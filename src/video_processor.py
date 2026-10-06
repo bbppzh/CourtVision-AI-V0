@@ -34,6 +34,7 @@ class VideoProcessor:
         enable_basketball: bool = False, ball_confidence: float = 0.25,
         rim_roi: RimROI | None = None, possession_distance_threshold: float = 0.4,
         possession_min_frames: int = 3, show_events: bool = False,
+        trace_ball_frames: bool = False,
     ) -> None:
         if isinstance(trajectory_length, bool) or not isinstance(trajectory_length, int) or trajectory_length <= 0:
             raise ValueError("Trajectory length must be a positive integer.")
@@ -60,6 +61,7 @@ class VideoProcessor:
         self.possession_distance_threshold = possession_distance_threshold
         self.possession_min_frames = possession_min_frames
         self.show_events = show_events
+        self.trace_ball_frames = trace_ball_frames
         self.ball_tracker: BallTracker | None = None
         self.interaction: PossessionEstimator | None = None
         self.event_analyzer: EventAnalyzer | None = None
@@ -81,10 +83,10 @@ class VideoProcessor:
             self.analytics = MotionAnalytics(width, height, fps)
             self.heatmap = MovementHeatmap(width, height)
             if self.enable_basketball:
-                self.ball_tracker = BallTracker(width, height, self.trajectory_length)
+                self.ball_tracker = BallTracker(width, height, self.trajectory_length, fps=fps)
                 self.interaction = PossessionEstimator(self.possession_distance_threshold, self.possession_min_frames)
                 self.event_analyzer = EventAnalyzer(fps, self.rim_roi, self.possession_distance_threshold)
-                self.basketball_analytics = BasketballAnalytics()
+                self.basketball_analytics = BasketballAnalytics(trace_ball_frames=self.trace_ball_frames)
 
     def _annotate_frame(self, frame: np.ndarray, frame_index: int) -> int:
         """Update frame analytics before drawing; return the visible person count."""
