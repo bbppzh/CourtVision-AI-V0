@@ -1,0 +1,32 @@
+{
+  "video": {
+    "width": 320,
+    "height": 240,
+    "fps": 29.97002997002997,
+    "frames_processed": 141
+  },
+  "coordinate_system": "image bounding_box_center",
+  "units": {
+    "distance": "px",
+    "speed": "px/s"
+  },
+  "scientific_warning": "Pixel motion depends on camera perspective, zoom, and camera movement. These are not real-world distances or speeds. Camera calibration and perspective correction are needed to measure physical units. Normalized distance divides pixel distance by the frame diagonal.",
+  "tracks": [
+    {
+      "track_id": 1,
+      "frames_seen": 141,
+      "cumulative_pixel_distance": 130.70934378869245,
+      "average_pixel_speed": 27.981163933643312,
+      "max_pixel_speed": 66.73503106801729,
+      "normalized_distance": 0.32677335947173114
+    },
+    {
+      "track_id": 2,
+      "frames_seen": 141,
+      "cumulative_pixel_distance": 62.69580461670399,
+      "average_pixel_speed": 13.421393881126871,
+      "max_pixel_speed": 81.26555171047328,
+      "normalized_distance": 0.15673951154175997
+    }
+  ]
+}

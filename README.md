@@ -4,6 +4,18 @@ An AI-powered basketball video analytics project built with deep learning and co
 
 This repository is being developed incrementally. **V1 — Player Tracking & Motion Analytics** extends the working V0 detector with ByteTrack IDs, recent trajectories, pixel movement summaries, and an image-coordinate heatmap. The model detects people; it does not distinguish players from other people.
 
+## V1 Demo
+
+**Player ID → Bounding Box → Trajectory**, with a movement heatmap and per-track JSON analytics.
+
+| Tracking preview | Movement heatmap |
+| --- | --- |
+| ![ByteTrack IDs, bounding boxes, and recent trajectories](docs/assets/v1-demo.gif) | ![Tracked center activity in image coordinates](docs/assets/v1-heatmap.png) |
+
+The public basketball sample keeps ByteTrack IDs **1** and **2** across all **141 frames**, at **320 × 240** and **29.97 FPS**, using CPU inference. The GIF is a lightweight preview sampled at approximately 6 FPS; the annotated MP4 preserves the source FPS. The heatmap represents activity in image coordinates.
+
+[View the generated JSON analytics](docs/assets/v1-analytics.json), including frames seen, cumulative pixel displacement, average/max pixel speed, and normalized displacement for each ID. Distance is measured in **pixels** and speed in **px/s**; court calibration is required for physical measurements.
+
 ## Roadmap
 
 - [x] V0 — Player Detection
