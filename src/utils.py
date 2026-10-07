@@ -1,11 +1,19 @@
 """Small helpers for input validation and frame annotation."""
 
+import colorsys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
 from src.detector import Detection
+
+if TYPE_CHECKING:
+    from src.tracker import TrackedPerson
+    from src.ball_tracker import BallTrack
+    from src.events import RimROI
+    from src.interaction import PossessionProxy
 
 
 def validate_input_path(path: Path) -> None:
@@ -25,21 +33,79 @@ def validate_video_paths(input_path: Path, output_path: Path) -> None:
         raise ValueError(f"Output path is a directory; provide an MP4 filename: {output_path}")
 
 
+def tracking_output_paths(
+    output_path: Path, analytics_path: Path | None = None, heatmap_path: Path | None = None,
+) -> tuple[Path, Path]:
+    """Derive V1 sidecar names from the annotated video's filename."""
+    return (
+        analytics_path if analytics_path is not None else output_path.with_name(f"{output_path.stem}_tracking.json"),
+        heatmap_path if heatmap_path is not None else output_path.with_name(f"{output_path.stem}_heatmap.png"),
+    )
+
+
+def validate_tracking_paths(
+    input_path: Path, output_path: Path, analytics_path: Path, heatmap_path: Path,
+) -> None:
+    """Reject output collisions and invalid extensions before any model work."""
+    validate_video_paths(input_path, output_path)
+    for path, extension in ((analytics_path, ".json"), (heatmap_path, ".png")):
+        if path.suffix.lower() != extension:
+            raise ValueError(f"Output path must end in {extension}: {path}")
+        if path.is_dir():
+            raise ValueError(f"Output path is a directory: {path}")
+    paths = [input_path, output_path, analytics_path, heatmap_path]
+    if len({path.resolve() for path in paths}) != len(paths):
+        raise ValueError("Input, video, analytics, and heatmap paths must all be different.")
+
+
+def track_color(track_id: int) -> tuple[int, int, int]:
+    """Give each ID a repeatable bright BGR color without random state."""
+    hue = (track_id * 0.61803398875) % 1.0
+    red, green, blue = colorsys.hsv_to_rgb(hue, 0.65, 1.0)
+    return int(blue * 255), int(green * 255), int(red * 255)
+
+
 def draw_detection(frame: np.ndarray, detection: Detection) -> None:
     """Draw a player box and a readable confidence label in place."""
     x1, y1, x2, y2 = detection["bbox"]
     color = (0, 220, 80)  # OpenCV uses BGR.
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+    draw_label(frame, f"Player {detection['confidence']:.2f}", x1, y1, color)
 
-    label = f"Player {detection['confidence']:.2f}"
+
+def draw_tracked_person(
+    frame: np.ndarray, person: "TrackedPerson", points: list[tuple[float, float]],
+    speed: float | None = None,
+) -> None:
+    """Draw a bounded trail, box, and ID label, optionally including px/s."""
+    color = track_color(person["track_id"])
+    if len(points) >= 2:
+        polyline = np.rint(points).astype(np.int32).reshape((-1, 1, 2))
+        cv2.polylines(frame, [polyline], False, color, 2, cv2.LINE_AA)
+    x1, y1, x2, y2 = person["bbox"]
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+    label = f"Player {person['track_id']} | {person['confidence']:.2f}"
+    if speed is not None:
+        label += f" | {speed:.0f} px/s"
+    draw_label(frame, label, x1, y1, color)
+
+
+def draw_label(
+    frame: np.ndarray, label: str, x: int, y: int, color: tuple[int, int, int],
+    font_scale: float = 0.6,
+) -> None:
+    """Fit a readable label inside the image, including on small demo frames."""
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.6
     thickness = 2
     (text_width, text_height), baseline = cv2.getTextSize(
         label, font, font_scale, thickness
     )
-    label_x = max(0, min(x1, frame.shape[1] - text_width - 8))
-    label_y = max(y1, text_height + baseline + 6)
+    if text_width + 8 > frame.shape[1]:
+        font_scale *= max(1, frame.shape[1] - 8) / (text_width + 8)
+        thickness = 1
+        (text_width, text_height), baseline = cv2.getTextSize(label, font, font_scale, thickness)
+    label_x = max(0, min(x, frame.shape[1] - text_width - 8))
+    label_y = min(frame.shape[0] - baseline - 1, max(y, text_height + baseline + 6))
     cv2.rectangle(
         frame,
         (label_x, label_y - text_height - baseline - 6),
@@ -57,3 +123,31 @@ def draw_detection(frame: np.ndarray, detection: Detection) -> None:
         thickness,
         cv2.LINE_AA,
     )
+
+
+def draw_ball(frame: np.ndarray, ball: "BallTrack", history: list[tuple[int, float, float]]) -> None:
+    """Draw an amber sports-ball candidate and its observed, unbroken trail."""
+    color = (0, 170, 255)
+    if len(history) >= 2:
+        points = np.rint([(x, y) for _, x, y in history]).astype(np.int32).reshape((-1, 1, 2))
+        cv2.polylines(frame, [points], False, color, 2, cv2.LINE_AA)
+    x1, y1, x2, y2 = ball["bbox"]
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+    draw_label(frame, f"Ball | {ball['confidence']:.2f}", x1, y1, color, font_scale=0.45)
+
+
+def draw_rim_roi(frame: np.ndarray, roi: "RimROI") -> None:
+    """Draw the manually selected rim region without a large filled label."""
+    color = (200, 200, 200)
+    cv2.rectangle(frame, (roi.x1, roi.y1), (roi.x2, roi.y2), color, 1)
+    text_y = roi.y1 - 5 if roi.y1 >= 16 else min(frame.shape[0] - 2, roi.y2 + 14)
+    cv2.putText(frame, "RIM ROI", (roi.x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(frame, "RIM ROI", (roi.x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
+
+
+def draw_possession_proxy(frame: np.ndarray, proxy: "PossessionProxy", players: list["TrackedPerson"]) -> None:
+    """A question-mark label makes the proximity interpretation explicit."""
+    person = next((person for person in players if person["track_id"] == proxy["player_track_id"]), None)
+    if person is not None:
+        x1, _, _, y2 = person["bbox"]
+        draw_label(frame, "POSSESSION?", x1, min(frame.shape[0] - 8, y2 + 16), (0, 170, 255), font_scale=0.4)
