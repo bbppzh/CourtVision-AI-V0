@@ -77,9 +77,16 @@ class PlayerTracker:
                 device=self.detector.device,
                 verbose=False,
             )
-        boxes = results[0].boxes
+        return self.track_detections(frame, results[0].boxes)
+
+    def track_detections(self, frame: np.ndarray, boxes: Boxes | None) -> list[TrackedPerson]:
+        """Associate precomputed person boxes, enabling shared V2 inference."""
+        if self._tracker is None:
+            raise RuntimeError("Start the tracker before processing a video.")
         if boxes is None:
             boxes = Boxes(np.empty((0, 6), dtype=np.float32), frame.shape[:2])
+        else:
+            boxes = boxes[boxes.cls == PERSON_CLASS_ID]
         tracked_rows = self._tracker.update(boxes.cpu().numpy(), frame)
         if len(tracked_rows) == 0:
             return []

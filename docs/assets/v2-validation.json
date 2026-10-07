@@ -1,0 +1,41 @@
+{
+  "input": {
+    "width": 960,
+    "height": 540,
+    "fps": 30.0,
+    "decoded_frames": 101
+  },
+  "output": {
+    "width": 960,
+    "height": 540,
+    "fps": 30.0,
+    "decoded_frames": 101
+  },
+  "no_roi_output": {
+    "width": 960,
+    "height": 540,
+    "fps": 30.0,
+    "decoded_frames": 101
+  },
+  "persistent_player_ids": [
+    1
+  ],
+  "ball_frames": 40,
+  "possession_proxy_frames": 6,
+  "max_ball_trail_length": 27,
+  "performance": {
+    "source_fps": 30.0,
+    "processing_seconds": 2.4671725000080187,
+    "processing_fps": 40.93755098181085,
+    "measurement": "Video processing through encoder close; excludes model loading and sidecar publication."
+  },
+  "shots": {
+    "enabled": true,
+    "attempts": 0,
+    "made_candidates": 0,
+    "missed_candidates": 0,
+    "unknown_outcomes": 0,
+    "shots": []
+  },
+  "real_shot_validation": "Not established; detector gaps prevent complete event evidence."
+}

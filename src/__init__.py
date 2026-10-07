@@ -1,1 +1,1 @@
-"""CourtVision AI person detection, tracking, and pixel motion analytics."""
+"""CourtVision AI detection, tracking, pixel motion, and event candidates."""

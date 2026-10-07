@@ -1,0 +1,86 @@
+{
+  "video": {
+    "width": 960,
+    "height": 540,
+    "fps": 30.0,
+    "frames_processed": 101
+  },
+  "coordinate_system": "image bounding_box_center",
+  "units": {
+    "distance": "px",
+    "speed": "px/s"
+  },
+  "scientific_warning": "Pixel motion depends on camera perspective, zoom, and camera movement. These are not real-world distances or speeds. Camera calibration and perspective correction are needed to measure physical units. Normalized distance divides pixel distance by the frame diagonal.",
+  "tracks": [
+    {
+      "track_id": 1,
+      "frames_seen": 101,
+      "cumulative_pixel_distance": 221.96105860733863,
+      "average_pixel_speed": 66.58831758220158,
+      "max_pixel_speed": 244.0514968696387,
+      "normalized_distance": 0.20151648841294242
+    }
+  ],
+  "basketball": {
+    "model_class": "sports ball",
+    "frames_detected": 40,
+    "detection_rate": 0.39603960396039606,
+    "primary_ball_tracks": 3,
+    "rate_definition": "Frames with a selected visible sports-ball candidate / frames processed; not precision, recall, or accuracy."
+  },
+  "possession_proxy": {
+    "player_frames": {
+      "1": 6
+    },
+    "unknown_frames": 95,
+    "warning": "Temporally confirmed image proximity does not prove physical possession."
+  },
+  "shot_candidates": {
+    "enabled": true,
+    "attempts": 0,
+    "made_candidates": 0,
+    "missed_candidates": 0,
+    "unknown_outcomes": 0,
+    "shots": []
+  },
+  "events": [
+    {
+      "event_id": 1,
+      "type": "possession_proxy_change",
+      "frame": 35,
+      "timestamp_seconds": 1.1666666666666667,
+      "player_track_id": 1,
+      "ball_track_id": 2,
+      "shot_id": null,
+      "heuristic_score": 0.5621488502977273
+    },
+    {
+      "event_id": 2,
+      "type": "possession_proxy_change",
+      "frame": 41,
+      "timestamp_seconds": 1.3666666666666667,
+      "player_track_id": null,
+      "ball_track_id": 2,
+      "shot_id": null,
+      "heuristic_score": 0.0
+    }
+  ],
+  "event_rules": {
+    "rim_roi": [
+      540,
+      193,
+      582,
+      213
+    ],
+    "ball_confidence": 0.25,
+    "possession_distance_threshold": 0.4,
+    "possession_min_frames": 3,
+    "score_definition": "Fixed rule-strength scores, not calibrated probabilities; events are candidates, not ground truth."
+  },
+  "performance": {
+    "source_fps": 30.0,
+    "processing_seconds": 2.4671725000080187,
+    "processing_fps": 40.93755098181085,
+    "measurement": "Video processing through encoder close; excludes model loading and sidecar publication."
+  }
+}

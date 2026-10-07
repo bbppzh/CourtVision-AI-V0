@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Iterable
 
 if TYPE_CHECKING:
     from src.tracker import TrackedPerson
+    from src.ball_tracker import BallTrack
+    from src.interaction import PossessionProxy
 
 
 @dataclass
@@ -148,9 +150,13 @@ class MotionAnalytics:
             "tracks": summaries,
         }
 
-    def save_json(self, path: Path, frames_processed: int) -> None:
+    def save_json(self, path: Path, frames_processed: int, extra_fields: dict | None = None) -> None:
         """Replace the destination only after valid JSON is completely written."""
         report = self.to_dict(frames_processed)
+        if extra_fields is not None:
+            if report.keys() & extra_fields.keys():
+                raise ValueError("Additional analytics fields must not overwrite V1 fields.")
+            report.update(extra_fields)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path: Path | None = None
         try:
@@ -165,3 +171,49 @@ class MotionAnalytics:
         finally:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
+
+
+class BasketballAnalytics:
+    """Running visible-ball and possession-proxy counts; never an accuracy score."""
+
+    def __init__(self, trace_ball_frames: bool = False) -> None:
+        self.frames_detected = 0
+        self.unknown_frames = 0
+        self.player_frames: dict[int, int] = {}
+        self.ball_track_ids: set[int] = set()
+        # Per-frame selected ball ID, or None when no ball was observed. This is
+        # the raw observation sequence an evaluation needs to compare against
+        # human labels; it is a trace, not a score. It is off by default because
+        # it grows with clip length.
+        self.trace_ball_frames = trace_ball_frames
+        self.ball_track_by_frame: list[int | None] = []
+
+    def update(self, ball: BallTrack | None, proxy: PossessionProxy | None) -> None:
+        if self.trace_ball_frames:
+            self.ball_track_by_frame.append(None if ball is None else ball["ball_track_id"])
+        if ball is not None:
+            self.frames_detected += 1
+            self.ball_track_ids.add(ball["ball_track_id"])
+        if proxy is None:
+            self.unknown_frames += 1
+        else:
+            identity = proxy["player_track_id"]
+            self.player_frames[identity] = self.player_frames.get(identity, 0) + 1
+
+    def to_dict(self, frames_processed: int) -> dict:
+        summary = {
+            "model_class": "sports ball", "frames_detected": self.frames_detected,
+            "detection_rate": self.frames_detected / frames_processed if frames_processed else 0.0,
+            "primary_ball_tracks": len(self.ball_track_ids),
+            "rate_definition": "Frames with a selected visible sports-ball candidate / frames processed; not precision, recall, or accuracy.",
+        }
+        if self.trace_ball_frames:
+            summary["ball_track_by_frame"] = self.ball_track_by_frame[:frames_processed]
+        return {
+            "basketball": summary,
+            "possession_proxy": {
+                "player_frames": {str(identity): count for identity, count in sorted(self.player_frames.items())},
+                "unknown_frames": self.unknown_frames,
+                "warning": "Temporally confirmed image proximity does not prove physical possession.",
+            },
+        }
