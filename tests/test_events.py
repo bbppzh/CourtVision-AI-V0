@@ -2,7 +2,9 @@
 
 import pytest
 
+from src.ball_tracker import BallTracker
 from src.events import EventAnalyzer, RimROI
+from src.interaction import PossessionEstimator
 
 
 PLAYER = {"track_id": 7, "bbox": [10, 150, 40, 230]}
@@ -212,6 +214,31 @@ def test_sideways_exit_before_later_aligned_below_observations_is_not_made():
     assert [shot["outcome"] for shot in engine.shots] != ["made_candidate"]
     event_types = [event["type"] for event in engine.events if event["shot_id"] is not None]
     assert "made_shot_candidate" not in event_types
+
+
+def test_reported_sideways_exit_is_rejected_through_full_v2_chain():
+    """The reported regression must survive ball matching and possession logic."""
+    path = [
+        (25, 180), (25, 180), (25, 180), (50, 160), (75, 120), (90, 90),
+        (95, 65), (100, 20), (100, 15), (100, 35), (120, 55), (108, 70), (108, 85),
+    ]
+    player = {"track_id": 7, "bbox": [10, 150, 40, 230]}
+    ball_tracker = BallTracker(320, 240, fps=30)
+    possession = PossessionEstimator()
+    analyzer = EventAnalyzer(30, RimROI(90, 30, 110, 50))
+
+    for frame_index, (x, y) in enumerate(path):
+        detection = {
+            "bbox": [x - 3, y - 3, x + 3, y + 3], "center": (x, y),
+            "confidence": 0.9, "class_id": 32, "class_name": "sports ball",
+        }
+        tracked_ball = ball_tracker.update([detection], frame_index)
+        proxy = possession.update(tracked_ball, [player], frame_index)
+        analyzer.update(tracked_ball, proxy, [player], frame_index)
+
+    analyzer.finalize(len(path) - 1)
+    assert analyzer.summary()["made_candidates"] == 0
+    assert analyzer.shots[0]["outcome"] == "unknown"
 
 
 def test_sideways_exit_inside_the_rim_band_is_not_a_passage():
